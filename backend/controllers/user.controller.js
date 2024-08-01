@@ -1,5 +1,9 @@
+
 import Notification from "../models/notefications.model.js";
 import User from "../models/user.model.js";
+
+import { v2 as cloudinary } from "cloudinary";
+import  bcrypt  from "bcryptjs";
 
 export const getUserProfile = async (req,res) => {
 
@@ -70,4 +74,108 @@ export const followUnfollowUser = async (req,res) => {
             res.status(500).json({error: error.message})
 
         }
+}
+
+
+export const getSuggestedUser = async (req, res)=>{
+    try {
+        const userId = req.user._id;
+        
+        // Fetch current user's following
+        const userFollowedByMe = await User.findById(userId).select("following");
+
+        // Find random users excluding current user and those already followed
+        const users = await User.aggregate([
+            { $match: { _id: { $ne: userId } } },
+            { $sample: { size: 10 } }
+        ]);
+
+        // Filter out users already followed
+        const filterUsers = users.filter(user => !userFollowedByMe.following.includes(user._id));
+        const suggestedUsers = filterUsers.slice(0, 4);
+
+        // Nullify password for suggested users
+        suggestedUsers.forEach(user => user.password = null);
+
+        res.status(200).json(suggestedUsers);
+
+    }  catch (error) {
+        console.log(error, "error in getUserProfile Controller");
+        res.status(500).json({error: error.message})
+
+    }
+}
+
+
+export const updateUser = async (req, res)=>{
+
+    const { fullName, email, username, currentPassword, newPassword, bio,link } = req.body;
+    let {profileImg, coverImg} = req.body;
+    
+    const userId = req.user._id;
+    
+    try{
+
+        let user = await User.findById(userId);
+        if(!user) return res.status(404).json({message: "User not found"});
+
+        if((!newPassword &&  currentPassword ) || (!currentPassword && newPassword ) ){
+            return res.status(400).json({ error: "please provide both current and new password"})
+        }         
+        
+
+        if(currentPassword && newPassword) 
+        {
+            const isMatch = await bcrypt.compare(currentPassword, user.password);
+            if (!isMatch) {
+                return res.status(400).json({error: "current password is incorrect"})
+            }
+            if(newPassword < 6)
+            {
+                return res.status(400).json({error: "password must be at least 6 character long"});
+            }
+
+            const salt = await bcrypt.genSalt(10);
+            user.password = await bcrypt.hash(newPassword, salt);
+        }
+
+        if(profileImg){
+
+            if(user.profileImg){
+                await cloudinary.uploader.destroy(user.profileImg.split("/").pop().split(".")[0] );
+            }
+
+            const uploadedResponase = await cloudinary.uploader.upload(profileImg)
+            profileImg = uploadedResponase.secure_url;  
+        }
+
+        if(coverImg){
+
+            if(user.coverImg){
+                await cloudinary.uploader.destroy(user.coverImg.split("/").pop().split(".")[0] );
+            }
+
+            const uploadedResponase = await cloudinary.uploader.upload(coverImg)
+            coverImg = uploadedResponase.secure_url;
+        }
+
+        user.fullName = fullName || user.fullName;
+        user.email = email || user.email;
+        user.bio = bio || user.bio;
+        user.link = link || user.link;
+        user.coverImg = coverImg  || user.coverImg;
+        user.profileImg = profileImg || user.profileImg;
+
+        user = await user.save();
+
+        user.password = null;
+
+        res.status(200).json(user)
+
+
+    }  catch (error) {
+        console.log(error, "error in update Controller");
+        res.status(500).json({error: error.message})
+    }
+
 }
